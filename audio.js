@@ -210,10 +210,25 @@ var Audio2 = (function () {
       return '<span class="' + (ok ? "w-ok" : "w-miss") + '">' + esc(w) + "</span>";
     }).join(" ");
   }
+  // 語形の違い（heads / headed / heading）をゆるく同一視する
+  function stem(w) { return w.length > 4 ? w.replace(/(ing|ed|es|s)$/, "") : w; }
   function hasPhrase(said, chk) {
     var a = tokens(said).join(" ");
     var b = tokens(chk).join(" ");
-    return !b || (" " + a + " ").indexOf(" " + b + " ") >= 0 || a.indexOf(b) >= 0;
+    if (!b || (" " + a + " ").indexOf(" " + b + " ") >= 0 || a.indexOf(b) >= 0) return true;
+    // 「take ... into consideration」「head up ～」のような表現：区切りごとに、順番どおり・語形ゆるく探す
+    var aw = tokens(said).map(stem);
+    var parts = String(chk).split(/\.\.\.|…|～|~|\bsomeone\b|\bsomething\b|\bsb\b|\bsth\b|\bone's\b/i).map(function (p) { return tokens(p).map(stem); }).filter(function (p) { return p.length; });
+    if (!parts.length) return true;
+    var pos = 0;
+    return parts.every(function (p) {
+      for (var i = pos; i + p.length <= aw.length; i++) {
+        var hit = true;
+        for (var k = 0; k < p.length; k++) if (aw[i + k] !== p[k]) { hit = false; break; }
+        if (hit) { pos = i + p.length; return true; }
+      }
+      return false;
+    });
   }
   function wordCount(s) { return tokens(s).length; }
 

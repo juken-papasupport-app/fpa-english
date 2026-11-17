@@ -68,7 +68,7 @@ select { width: 100%; padding: 10px; border-radius: 10px; border: 1.5px solid #e
 .say { border: 0; background: #ccfbf1; color: #115e59; border-radius: 99px; padding: 4px 10px; font-size: 14px; vertical-align: middle; min-height: 32px; }
 .say.big2 { font-size: 16px; padding: 10px 16px; font-weight: 700; }
 
-.ansbox textarea, #transcript, #imp, textarea.copy { width: 100%; border: 2px solid #99f6e4; border-radius: 14px; padding: 12px; background: #fff; line-height: 1.5; }
+.ansbox textarea, #transcript, #imp, textarea.copy, textarea#said { width: 100%; border: 2px solid #99f6e4; border-radius: 14px; padding: 12px; background: #fff; line-height: 1.5; }
 .mic { min-height: 52px; border: 0; border-radius: 14px; background: #be123c; color: #fff; font-weight: 800; font-size: 17px; }
 .mic.on { background: #7f1d1d; animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: .7; } }
@@ -86,6 +86,10 @@ select { width: 100%; padding: 10px; border-radius: 10px; border: 1.5px solid #e
 .w-miss { color: #dc2626; font-weight: 800; text-decoration: underline wavy #fca5a5; }
 .extra { font-size: 13px; color: #64748b; }
 .hint2 { text-align: center; color: #64748b; }
+.blank { color: #0f766e; font-weight: 800; white-space: nowrap; }
+.ansline, #packfile { display: block; width: 100%; box-sizing: border-box; font: inherit; font-size: 17px; padding: 12px; border-radius: 12px; border: 1.5px solid #cbd5e1; background: #fff; margin: 6px 0; }
+#packfile { font-size: 14px; }
+.model mark { background: #fef08a; border-radius: 4px; padding: 0 2px; }
 
 .listitem { display: flex; justify-content: space-between; align-items: center; gap: 8px; width: 100%; text-align: left; background: #fff; border: 0; border-radius: 12px; padding: 12px; margin-bottom: 8px; min-height: 52px; box-shadow: 0 1px 3px rgba(0,0,0,.06); font-size: 15px; }
 .stages { display: flex; gap: 4px; margin-bottom: 8px; }

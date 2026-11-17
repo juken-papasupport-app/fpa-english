@@ -9,7 +9,7 @@
   function defaults() {
     return {
       settings: { rate: 0.9, voice: "", silent: false, sttWhileRec: true, scenes: C.scenes.map(function (s) { return s.id; }), newPerDay: 8 },
-      srs: {}, weak: {}, corrections: [], days: {}, fluency: [], newDone: {}
+      srs: {}, weak: {}, corrections: [], days: {}, fluency: [], newDone: {}, packs: []
     };
   }
   function load() {
@@ -21,6 +21,7 @@
       ["srs", "weak", "days", "newDone"].forEach(function (k) { s[k] = s[k] || {}; });
       s.corrections = s.corrections || [];
       s.fluency = s.fluency || [];
+      s.packs = s.packs || [];
       return s;
     } catch (e) { return defaults(); }
   }
@@ -45,7 +46,7 @@
 
   // ---------- 練習時間の記録 ----------
   setInterval(function () {
-    if (document.hidden || ["home", "records", "settings", "import"].indexOf(screen) >= 0) return;
+    if (document.hidden || ["home", "records", "settings", "import", "pack"].indexOf(screen) >= 0) return;
     var d = st.days[today()] || { sec: 0, n: 0 };
     d.sec += 5;
     st.days[today()] = d;
@@ -113,6 +114,86 @@
     return b ? { id: id, scene: m[1], ja: b.ja, stages: b.stages, final: b.stages[b.stages.length - 1] } : null;
   }
 
+  // ---------- 教材パック（音声教材から作った問題。端末の中だけに保存） ----------
+  // 項目のIDは「m-<パックID>-<内容のハッシュ>」。同じパックを取り込み直しても、同じ問題の記録は残る。
+  var PTYPES = {
+    dictation: { icon: "✍️", label: "ディクテーション" },
+    cloze: { icon: "🔤", label: "穴埋め" },
+    ja2en: { icon: "🗣", label: "和→英（話す・書く）" },
+    card: { icon: "🃏", label: "表現カード" }
+  };
+  var PACK_NEW = 10; // 1回の練習で出す新しい問題の数
+  function hash(s) { var h = 5381; for (var i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0; return h.toString(36); }
+  function packItemsOf(pk) {
+    return pk.items.map(function (x) { return Object.assign({ packId: pk.id, packTitle: pk.title }, x); });
+  }
+  function findPackItem(id) {
+    var m = id.match(/^m-([a-z0-9]+)-[a-z0-9]+$/);
+    var pk = m && st.packs.find(function (p) { return p.id === m[1]; });
+    return pk ? packItemsOf(pk).find(function (x) { return x.id === id; }) || null : null;
+  }
+  // packId: null なら全教材、type: null なら全種類。due だけのときは withNew=false
+  function packQueue(packId, type, withNew, max) {
+    var items = [];
+    st.packs.forEach(function (pk) { if (!packId || pk.id === packId) items = items.concat(packItemsOf(pk)); });
+    if (type) items = items.filter(function (x) { return x.type === type; });
+    var due = shuffle(items.filter(function (x) { return isDue(x.id); }));
+    var fresh = withNew ? items.filter(function (x) { return !st.srs[x.id]; }).slice(0, PACK_NEW) : [];
+    return due.concat(fresh).slice(0, max || 20);
+  }
+  function cleanPackItem(x) {
+    if (!x || !PTYPES[x.type]) return null;
+    var s = function (v) { return String(v == null ? "" : v).replace(/\s+/g, " ").trim(); };
+    var it = { type: x.type, en: s(x.en), ja: s(x.ja) };
+    if (!it.en) return null;
+    if (x.type === "cloze") {
+      it.blank = s(x.blank);
+      if (!it.blank || it.en.toLowerCase().indexOf(it.blank.toLowerCase()) < 0) return null;
+    }
+    if (x.type === "ja2en" && !it.ja) return null;
+    if (x.type === "card") { it.ex = s(x.ex); it.exJa = s(x.exJa); if (!it.ja) return null; }
+    if (x.chk) it.chk = s(x.chk);
+    if (x.hint) it.hint = s(x.hint);
+    if (x.note) it.note = s(x.note);
+    if (x.tag) it.tag = s(x.tag);
+    return it;
+  }
+  function importPack(d) {
+    var p = d.pack || {};
+    var title = String(p.title || "教材").trim();
+    var pid = String(p.id || "").toLowerCase().replace(/[^a-z0-9]/g, "") || hash(title);
+    var seen = {};
+    var items = [];
+    d.items.forEach(function (x) {
+      var it = cleanPackItem(x);
+      if (!it) return;
+      it.id = "m-" + pid + "-" + hash(it.type + "|" + it.en + "|" + (it.blank || ""));
+      if (seen[it.id]) return;
+      seen[it.id] = 1;
+      items.push(it);
+    });
+    if (!items.length) return alert("取り込める問題がありませんでした。");
+    var old = st.packs.find(function (x) { return x.id === pid; });
+    if (old && !confirm("「" + old.title + "」はすでにあります。新しい内容に置き換えますか？（同じ問題の記録は残ります）")) return;
+    var pk = { id: pid, title: title, source: String(p.source || ""), added: old ? old.added : today(), updated: today(), items: items };
+    if (old) st.packs[st.packs.indexOf(old)] = pk; else st.packs.push(pk);
+    save();
+    var cnt = {};
+    items.forEach(function (x) { cnt[x.type] = (cnt[x.type] || 0) + 1; });
+    alert("「" + title + "」を取り込みました（" + items.length + "問）\n" + Object.keys(cnt).map(function (k) { return PTYPES[k].label + " " + cnt[k] + "問"; }).join("\n") + (d.items.length > items.length ? "\n（形式に合わない・重複した " + (d.items.length - items.length) + "問は除きました）" : ""));
+    packMenu();
+  }
+  function deletePack(pid) {
+    var pk = st.packs.find(function (x) { return x.id === pid; });
+    if (!pk || !confirm("「" + pk.title + "」と、その学習記録を削除しますか？")) return;
+    st.packs = st.packs.filter(function (x) { return x.id !== pid; });
+    var pre = "m-" + pid + "-";
+    Object.keys(st.srs).forEach(function (k) { if (k.indexOf(pre) === 0) delete st.srs[k]; });
+    Object.keys(st.weak).forEach(function (k) { if (k.indexOf(pre) === 0) delete st.weak[k]; });
+    save();
+    packMenu();
+  }
+
   // ---------- ホーム ----------
   function home() {
     screen = "home";
@@ -135,6 +216,7 @@
         tile("shadow", "④", "シャドーイング・音読", "録音して聞き比べ") +
         tile("speech", "⑤", "1分スピーチ", "流暢さメーター") +
         tile("role", "⑥", "会議ロールプレイ", "CFO・事業部長と") +
+        tile("pack", "⑦", "教材の問題", st.packs.length ? "復習 " + packQueue(null, null, false, 999).length + "問" : "音声教材から作った問題") +
       "</section>" +
       '<section class="card"><div class="cat-head"><span>練習する場面</span><button class="link" data-allscenes="1">' + (st.settings.scenes.length === C.scenes.length ? "すべて外す" : "すべて選ぶ") + '</button></div><div class="chips">' + chips + "</div></section>" +
       '<button class="big sub" data-go="import">📥 Claudeの添削結果を取り込む</button>'
@@ -209,16 +291,24 @@
   function targetOf(e) {
     if (e.type === "p") return { ja: e.it.exJa, model: e.it.ex, chk: e.it.chk, hint: e.it.en + "（" + e.it.ja + "）", scene: e.it.scene };
     if (e.type === "b") return { ja: e.it.ja, model: e.it.final, chk: "", hint: e.it.stages[0], scene: e.it.scene };
+    if (e.type === "m") {
+      var x = e.it, card = x.type === "card" && x.ex && x.exJa;
+      var model = card ? x.ex : x.en;
+      return { ja: card ? x.exJa : x.ja, model: model, chk: card ? x.en : x.chk || x.blank || "", hint: x.hint || model.split(/\s+/).slice(0, 3).join(" ") + " …", scene: "" };
+    }
     return { ja: e.it.ja || "", model: e.it.better, chk: "", hint: "前の言い方：" + e.it.original, scene: e.it.scene || "" };
   }
+  function runTitle() { return q.kind === "focus" ? "🎯 弱点集中モード" : q.kind === "pack" ? "⑦ 教材の問題" : "② 和→英で話す"; }
   function speakView() {
-    if (q.i >= q.items.length) return done(q.kind === "focus" ? "弱点集中モード" : "和→英で話す", q.ok, q.items.length);
+    if (q.i >= q.items.length) return done(runTitle().replace(/^\S+ /, ""), q.ok, q.items.length);
     var e = q.items[q.i];
+    // 教材の問題のうち、ディクテーション・穴埋め・表現カードは専用の画面で出す
+    if (e.type === "m" && e.it.type !== "ja2en" && !(e.it.type === "card" && q.kind === "focus" && e.it.ex && e.it.exJa)) return packView(e);
     var t = targetOf(e);
     var s = sceneOf(t.scene);
     q.checked = false;
-    render(header(q.kind === "focus" ? "🎯 弱点集中モード" : "② 和→英で話す") + progress() +
-      '<section class="qcard"><div class="meta">' + (s.icon || "") + " " + esc(s.label || "") +
+    render(header(runTitle()) + progress() +
+      '<section class="qcard"><div class="meta">' + (e.type === "m" ? packMeta(e.it) : (s.icon || "") + " " + esc(s.label || "")) +
       (e.type === "c" ? ' <span class="tag bad">添削</span>' : e.type === "b" ? ' <span class="tag">長い文</span>' : "") + "</div>" +
       '<p class="prompt">' + esc(t.ja) + "</p>" +
       (e.type === "c" ? '<p class="orig">あなたの元の言い方：<s>' + esc(e.it.original) + "</s></p>" : "") +
@@ -261,7 +351,7 @@
     if (q.kind === "speak" && !st.srs[id]) useNew("speak");
     srsRecord(id, ok);
     if (ok) q.ok++;
-    else if (e.type === "p") addWeak(id);
+    else if (e.type === "p" || e.type === "m") addWeak(id);
     q.i++;
     speakView();
   }
@@ -273,6 +363,7 @@
       var p = st.srs[id];
       if (p && p.box >= GRAD) return;
       if (p && p.box > 0 && p.due > today()) return; // まちがえたばかりの表現はすぐ練習できる
+      if (id[0] === "m") { var mi = findPackItem(id); if (mi) out.push({ type: "m", it: mi }); return; }
       var it = id[0] === "b" ? findBuild(id) : findPhrase(id);
       if (it) out.push({ type: id[0] === "b" ? "b" : "p", it: it });
     });
@@ -287,6 +378,103 @@
     q = { kind: "focus", items: shuffle(focusQueue()).slice(0, 15), i: 0, ok: 0 };
     screen = "focus";
     speakView();
+  }
+
+  // ---------- ⑦ 教材の問題 ----------
+  function packMeta(it) {
+    var ty = PTYPES[it.type];
+    return "📚 " + esc(it.packTitle) + (it.tag ? " · " + esc(it.tag) : "") + ' <span class="tag">' + ty.icon + " " + ty.label + "</span>" + (st.srs[it.id] ? "" : ' <span class="tag new">NEW</span>');
+  }
+  function packMenu() {
+    screen = "pack";
+    var allDue = packQueue(null, null, false, 999).length;
+    render(header("⑦ 教材の問題") +
+      '<p class="lead">音声教材の文字起こしから作った問題です。読み上げは本アプリの音声（TTS）を使います。<b>教材の内容はこの端末の中だけ</b>に保存されます。</p>' +
+      (st.packs.length ? '<button class="big focus" data-prun="*:" ' + (allDue ? "" : "disabled") + ">🔁 今日の復習（全教材）<small>" + allDue + "問</small></button>" : "") +
+      st.packs.map(function (pk) {
+        var items = packItemsOf(pk);
+        var grad = items.filter(function (x) { return st.srs[x.id] && st.srs[x.id].box >= GRAD; }).length;
+        var btns = Object.keys(PTYPES).map(function (ty) {
+          var all = items.filter(function (x) { return x.type === ty; });
+          if (!all.length) return "";
+          var due = all.filter(function (x) { return isDue(x.id); }).length;
+          var fresh = all.filter(function (x) { return !st.srs[x.id]; }).length;
+          return '<button class="listitem" data-prun="' + pk.id + ":" + ty + '"><span>' + PTYPES[ty].icon + " " + PTYPES[ty].label + "（" + all.length + '問）</span><span class="tag">' + (due ? "復習" + due : "") + (due && fresh ? "・" : "") + (fresh ? "NEW" + fresh : "") + (!due && !fresh ? "✓" : "") + "</span></button>";
+        }).join("");
+        return '<section class="card"><h2>📚 ' + esc(pk.title) + "</h2>" + (pk.source ? '<p class="note">' + esc(pk.source) + "</p>" : "") +
+          '<p class="note">' + items.length + "問・習得 " + grad + "・取り込み " + esc(pk.updated || pk.added) + "</p>" + btns +
+          '<button class="big sub" data-prun="' + pk.id + ':">🔀 全種類を混ぜて練習</button><button class="link danger" data-delpack="' + pk.id + '">この教材を削除</button></section>';
+      }).join("") +
+      '<section class="card"><h2>📥 問題を取り込む</h2><p class="note">MulmoClaudeで作った問題ファイル（.json）を選ぶか、中身を貼り付けてください。</p>' +
+      '<input type="file" id="packfile" accept=".json,application/json,text/plain">' +
+      '<textarea id="imp" rows="5" placeholder="ここに貼り付け（{&quot;pack&quot;: …, &quot;items&quot;: […]}）"></textarea><button class="big start" data-doimport="1">取り込む</button></section>');
+  }
+  function startPack(key) {
+    var k = key.split(":"), pid = k[0] === "*" ? null : k[0], ty = k[1] || null;
+    q = { kind: "pack", items: packQueue(pid, ty, !!pid, 20).map(function (x) { return { type: "m", it: x }; }), i: 0, ok: 0 };
+    screen = "packrun";
+    speakView();
+  }
+  // ディクテーション・穴埋め・表現カード
+  function packView(e) {
+    var it = e.it;
+    q.checked = false;
+    q.flip = false;
+    var top = header(runTitle()) + progress() + '<section class="qcard"><div class="meta">' + packMeta(it) + "</div>";
+    var slow = '<button class="say" data-pslow="1">🐢 ゆっくり</button>';
+    if (it.type === "dictation") {
+      render(top + '<p class="prompt small">音声を聞いて、英文を書き取りましょう。</p><div class="row"><button class="say big2" data-say="' + say(it.en) + '">🔊 聞く</button>' + slow + "</div>" +
+        '<button class="link" data-hint="1">💡 日本語訳を見る</button><p class="hint" id="hint" hidden>' + esc(it.ja || "（訳なし）") + "</p></section>" +
+        '<textarea id="said" rows="4" placeholder="聞こえた英文を入力" autocapitalize="sentences" autocorrect="off" spellcheck="false"></textarea>' +
+        '<button class="big start" data-pcheck="1">答え合わせ</button><div id="result"></div>');
+      setTimeout(function () { A.speak(it.en, { rate: st.settings.rate, voice: st.settings.voice }); }, 300);
+    } else if (it.type === "cloze") {
+      var i0 = it.en.toLowerCase().indexOf(it.blank.toLowerCase());
+      var nw = it.blank.split(/\s+/).length;
+      render(top + '<p class="phrase long">' + esc(it.en.slice(0, i0)) + '<span class="blank">' + "＿".repeat(Math.min(8, nw * 2 + 1)) + "（" + nw + "語）</span>" + esc(it.en.slice(i0 + it.blank.length)) + "</p>" +
+        (it.ja ? '<p class="exja">' + esc(it.ja) + "</p>" : "") +
+        '<button class="link" data-hint="1">💡 ヒント（最初の文字）</button><p class="hint" id="hint" hidden>' + esc(it.blank.split(/\s+/).map(function (w) { return w[0] + "…"; }).join(" ")) + "</p>" +
+        '<button class="link" data-say="' + say(it.en) + '">🔊 文全体を聞いてから答える</button></section>' +
+        '<input type="text" id="said" class="ansline" placeholder="空欄に入る英語" autocapitalize="off" autocorrect="off" spellcheck="false">' +
+        '<button class="big start" data-pcheck="1">答え合わせ</button><div id="result"></div>');
+    } else {
+      render(top + '<p class="phrase">' + esc(it.en) + " " + sayBtn(it.en) + "</p>" +
+        (it.ex ? '<p class="ex">' + esc(it.ex) + " " + sayBtn(it.ex) + "</p>" : "") +
+        '<div id="back"></div></section><div id="result"><button class="big start" data-pflip="1">意味を見る</button></div>');
+      A.speak(it.ex || it.en, { rate: st.settings.rate, voice: st.settings.voice });
+    }
+  }
+  function normAns(s) { return A.tokens(s).join(" "); }
+  function packCheck() {
+    if (q.checked) return;
+    var it = q.items[q.i].it;
+    var el = document.getElementById("said");
+    var s = el ? el.value.trim() : "";
+    if (!s) { el && el.focus(); return; }
+    q.checked = true;
+    var ok, html;
+    if (it.type === "dictation") {
+      var r = A.compare(it.en, s);
+      ok = r.score >= 0.95 && r.extra.length <= 1;
+      html = '<div class="fb ' + (ok ? "ok" : "ng") + '">' + (ok ? "⭕ 書き取れました（一致 " : "❌ もう少し（一致 ") + Math.round(r.score * 100) + "%）</div>" +
+        '<div class="model"><small>正解（赤＝書けなかった語）</small><p>' + A.diffHtml(it.en, s, esc) + " " + sayBtn(it.en) + "</p>" + (it.ja ? '<p class="exja">' + esc(it.ja) + "</p>" : "") + "</div>" +
+        (r.extra.length ? '<p class="extra">余分・ちがう語：' + esc(r.extra.slice(0, 12).join(" ")) + "</p>" : "");
+    } else {
+      ok = normAns(s) === normAns(it.blank);
+      var i0 = it.en.toLowerCase().indexOf(it.blank.toLowerCase());
+      html = '<div class="fb ' + (ok ? "ok" : "ng") + '">' + (ok ? "⭕ 正解" : "❌ 正解は「" + esc(it.blank) + "」") + "</div>" +
+        '<div class="model"><p>' + esc(it.en.slice(0, i0)) + "<mark>" + esc(it.en.slice(i0, i0 + it.blank.length)) + "</mark>" + esc(it.en.slice(i0 + it.blank.length)) + " " + sayBtn(it.en) + "</p></div>";
+      A.speak(it.en, { rate: st.settings.rate, voice: st.settings.voice });
+    }
+    q.lastOk = ok;
+    document.getElementById("result").innerHTML = html + (it.note ? '<p class="note">📝 ' + esc(it.note) + "</p>" : "") +
+      '<button class="big start" data-next="1">次へ ▶</button>' +
+      (!ok ? '<button class="link" data-override="1">' + (it.type === "dictation" ? "表記のちがいだけ" : "同じ意味の言い方") + " → ⭕にする</button>" : "");
+  }
+  function packFlip() {
+    var it = q.items[q.i].it;
+    document.getElementById("back").innerHTML = '<div class="back"><p class="ja">' + esc(it.ja) + "</p>" + (it.exJa ? '<p class="exja">' + esc(it.exJa) + "</p>" : "") + (it.note ? '<p class="note">📝 ' + esc(it.note) + "</p>" : "") + "</div>";
+    document.getElementById("result").innerHTML = '<div class="judge"><button class="big ng" data-judge="0">まだ</button><button class="big ok" data-judge="1">覚えた</button></div>';
   }
 
   // ---------- ③ 文を伸ばす ----------
@@ -605,6 +793,7 @@
     var txt = m ? m[1] : raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
     var d;
     try { d = JSON.parse(txt); } catch (e) { return alert("JSONを読み取れませんでした。Claudeの返答の最後にある ```json … ``` の部分を貼り付けてください。"); }
+    if (d && !Array.isArray(d) && Array.isArray(d.items)) return importPack(d); // 教材の問題
     var list = Array.isArray(d) ? d : d.corrections;
     if (!Array.isArray(list)) return alert("corrections が見つかりませんでした。");
     var n = 0;
@@ -650,7 +839,8 @@
         var per = f.dur ? Math.round((f.pauses / (f.dur / 60)) * 10) / 10 : 0;
         return "<tr><td>" + f.date.slice(5) + "</td><td>" + f.dur + "秒</td><td>" + f.pauses + "回（" + per + "/分）</td><td>" + f.longest + "秒</td><td>" + (f.wpm == null ? "—" : f.wpm) + "</td></tr>";
       }).join("") + "</table>" : '<p class="note">まだ記録がありません。</p>') + "</section>" +
-      '<section class="card"><h2>習得状況</h2><div class="kv"><span>表現カード（覚えた）</span><b>' + learned + " / " + nPhr + '</b></div><div class="kv"><span>和→英（言えるようになった）</span><b>' + spoken + " / " + nPhr + '</b></div><div class="kv"><span>弱点（卒業 / 全体）</span><b>' + weakGrad + " / " + weakAll + '</b></div><div class="kv"><span>添削（習得 / 全体）</span><b>' + corrGrad + " / " + st.corrections.length + "</b></div></section>" +
+      '<section class="card"><h2>習得状況</h2><div class="kv"><span>表現カード（覚えた）</span><b>' + learned + " / " + nPhr + '</b></div><div class="kv"><span>和→英（言えるようになった）</span><b>' + spoken + " / " + nPhr + '</b></div><div class="kv"><span>弱点（卒業 / 全体）</span><b>' + weakGrad + " / " + weakAll + '</b></div><div class="kv"><span>添削（習得 / 全体）</span><b>' + corrGrad + " / " + st.corrections.length + "</b></div>" +
+        (st.packs.length ? '<div class="kv"><span>教材の問題（習得 / 全体）</span><b>' + st.packs.reduce(function (a, pk) { return a + pk.items.filter(function (x) { return st.srs[x.id] && st.srs[x.id].box >= GRAD; }).length; }, 0) + " / " + st.packs.reduce(function (a, pk) { return a + pk.items.length; }, 0) + "</b></div>" : "") + "</section>" +
       '<section class="card"><h2>データの保存</h2><p class="note">機種変更に備えて、記録をコピーしてメモなどに保存できます。</p><div class="row"><button class="big sub" data-backup="1">記録をコピー</button><button class="big sub" data-restore="1">記録を復元</button></div></section>');
   }
 
@@ -705,7 +895,13 @@
       if (g === "speech") return speechMenu();
       if (g === "role") return roleMenu();
       if (g === "import") return importView();
+      if (g === "pack") return packMenu();
     }
+    if (ds.prun) return startPack(ds.prun);
+    if (ds.pcheck) return packCheck();
+    if (ds.pflip) return packFlip();
+    if (ds.pslow) { var cur = q.items[q.i].it; A.speak(cur.en, { rate: Math.min(0.7, st.settings.rate), voice: st.settings.voice }); return; }
+    if (ds.delpack) return deletePack(ds.delpack);
     if (ds.scene) {
       var arr = st.settings.scenes, k = arr.indexOf(ds.scene);
       if (k >= 0) { if (arr.length > 1) arr.splice(k, 1); } else arr.push(ds.scene);
@@ -755,8 +951,16 @@
   });
   app.addEventListener("change", function (e) {
     if (e.target.id === "voice") { st.settings.voice = e.target.value; save(); }
+    if (e.target.id === "packfile" && e.target.files[0]) {
+      var fr = new FileReader();
+      fr.onload = function () { document.getElementById("imp").value = fr.result; doImport(); };
+      fr.readAsText(e.target.files[0]);
+    }
+  });
+  app.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && e.target.id === "said" && e.target.tagName === "INPUT") { e.preventDefault(); packCheck(); }
   });
 
-  window.__fpa = { st: function () { return st; }, findBuild: findBuild, focusQueue: focusQueue, feedbackPrompt: feedbackPrompt };
+  window.__fpa = { st: function () { return st; }, findBuild: findBuild, focusQueue: focusQueue, feedbackPrompt: feedbackPrompt, importPack: importPack, packQueue: packQueue, findPackItem: findPackItem };
   home();
 })();
