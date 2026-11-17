@@ -1,5 +1,5 @@
 // オンライン時は最新版を取得し、オフライン時は保存しておいた版で動く
-var CACHE = "fpa-cache-v2";
+var CACHE = "fpa-cache-v3";
 var FILES = ["./", "index.html", "style.css", "app.js", "audio.js", "manifest.json", "content/phrases.js", "content/drills.js", "icon-180.png", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(FILES); }));

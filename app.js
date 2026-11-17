@@ -41,7 +41,8 @@
   var SAY = [];
   function say(text) { SAY.push(text); return SAY.length - 1; }
   function sayBtn(text, label) { return '<button class="say" data-say="' + say(text) + '">' + (label || "🔊") + "</button>"; }
-  function render(html) { A.stopSpeak(); SAY = []; app.innerHTML = html; window.scrollTo(0, 0); }
+  // 注意：html の組み立て（sayBtn）は render の呼び出し前に終わっているので、ここで SAY を消すと 🔊 が空になる
+  function render(html) { A.stopSpeak(); app.innerHTML = html; window.scrollTo(0, 0); }
   function header(title) { return '<header class="top"><button class="icon" data-go="home" aria-label="ホーム">←</button><h1>' + title + "</h1><span></span></header>"; }
 
   // ---------- 練習時間の記録 ----------
